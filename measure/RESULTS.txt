@@ -1,0 +1,14 @@
+notify: what waiting on a file-bound job store costs
+date 2026-09-06  commit 1a6a2bf  host MINGW64_NT-10.0-26200 x86_64  go go1.26.5
+instrument job/go/watch_measure_test.go (NOTIFY_MEASURE=1); poll interval 750 ms; quiet budget 100 ms; store in the OS temp directory
+
+records	80
+notice_latency_p50_ms	781.3
+notice_latency_p95_ms	837.3
+quiet_overshoot_p50_ms	21.9
+quiet_overshoot_p95_ms	50.6
+watch_read_p50_ms	24.6
+watch_read_p95_ms	27.9
+
+verified for: the file binding on a local NTFS temp directory, one writer, one listener.
+NOT examined: a store on SMB, a push binding, more than one listener, Python or C++ listeners.
