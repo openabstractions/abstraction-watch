@@ -6,7 +6,9 @@ build-backend = "setuptools.build_meta"
 name = "abstraction-watch"
 version = "0.1.0"
 description = "The present, and whether it has stopped changing. Change and quiet as one subscription."
+readme = "README.md"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.9"
 dependencies = []
 
