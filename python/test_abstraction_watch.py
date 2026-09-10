@@ -1,7 +1,8 @@
+import queue
 import threading
 import unittest
 
-from abstraction_watch import Closed, poll, push
+from abstraction_watch import Closed, poll, push, settle
 
 BUDGET = 0.04
 
@@ -97,6 +98,51 @@ class Poll(unittest.TestCase):
         a, b = poll(read, 3600.0, BUDGET), poll(read, 3600.0, BUDGET)
         a.next()
         self.assertFalse(b.next().quiet, "taking a's present took b's")
+
+
+class Settle(unittest.TestCase):
+    def run_settle(self, q):
+        rang = threading.Semaphore(0)
+        t = threading.Thread(target=settle, args=(q, BUDGET, rang.release),
+                             daemon=True)
+        t.start()
+        return rang, t
+
+    def test_a_burst_produces_one_call(self):
+        q = queue.Queue()
+        rang, t = self.run_settle(q)
+        for _ in range(5):
+            q.put(object())
+        self.assertTrue(rang.acquire(timeout=5), "the burst never settled")
+        self.assertFalse(rang.acquire(timeout=4 * BUDGET),
+                         "five signals produced more than one settled read")
+        q.put(None)
+        t.join(timeout=5)
+
+    def test_a_still_source_calls_nothing(self):
+        q = queue.Queue()
+        rang, t = self.run_settle(q)
+        self.assertFalse(rang.acquire(timeout=4 * BUDGET),
+                         "nothing moved and it read anyway")
+        q.put(None)
+        t.join(timeout=5)
+
+    def test_none_ends_it(self):
+        q = queue.Queue()
+        _, t = self.run_settle(q)
+        q.put(None)
+        t.join(timeout=5)
+        self.assertFalse(t.is_alive(), "None on the queue did not stop it")
+
+    def test_a_second_burst_is_reported_too(self):
+        q = queue.Queue()
+        rang, t = self.run_settle(q)
+        q.put(object())
+        self.assertTrue(rang.acquire(timeout=5))
+        q.put(object())
+        self.assertTrue(rang.acquire(timeout=5), "it settled once and stopped")
+        q.put(None)
+        t.join(timeout=5)
 
 
 if __name__ == "__main__":
