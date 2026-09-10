@@ -1,9 +1,12 @@
 # abstraction-watch
 
-**In development.** Tagged `go/v0.1.0`, but no conformance scenario cites this
-layer on its own, and the API carries no stability promise.
+**In development.** No conformance scenario cites this layer on its own, and the
+API carries no stability promise. Tags exist and no version number is typed on
+this page: [the tag list](https://github.com/openabstractions/abstraction-watch/tags)
+is the answer to "which release", because a tag is the only thing that cannot
+drift.
 
-A notice is the present — what is true now, and whether it has stopped
+A notice is the snapshot — what is true now, and whether it has stopped
 changing — so a listener that needs the absence of change is told it, instead
 of writing a loop that wakes up to check.
 
@@ -28,7 +31,7 @@ silence    for how long, by this observer's clock
 
 | word | meaning |
 |---|---|
-| **notice** | the present, not an event and not a history; a listener asks *what now?* and is answered with it |
+| **notice** | the snapshot, not an event and not a history; a listener asks *what now?* and is answered with it |
 | **budget** | how long nothing visible may change before the listener is told quiet |
 | **visible** | what counts as a change is the source's to say; for a job record it is `JOB-N1` on [the job page](https://github.com/openabstractions/abstraction-job) |
 | **source** | polled (`Poll`: something that must be asked) or pushed (`Push`: something that says when it moved) |
@@ -40,12 +43,15 @@ cite them, and the behaviour harness reports which have no scenario.
 
 ## Obtain
 
-- **Go.** `go get github.com/openabstractions/abstraction-watch/go`. No tag
-  yet; `go get` resolves a pseudo-version of `main`.
-- **Python.** Not on any index. `python/abstraction_watch.py` is one module
-  with no imports of ours; `python/pyproject.toml` builds a wheel
-  (`pip wheel python/`).
-- **C++.** Header only: `cpp/include` on the include path.
+- **Go.** `go get github.com/openabstractions/abstraction-watch/go`.
+  [Releases, newest first](https://github.com/openabstractions/abstraction-watch/tags);
+  pin the exact tag you tested against.
+- **Python.** Not on any index —
+  [what to install, import and call](python/README.md).
+- **C++.** Header only: `cpp/include` on the include path. No tagged release.
+
+Whether to adopt this at all, what it costs and what is not proven:
+[Adopting](CONTRIBUTING.md#adopting).
 
 ## Example
 
@@ -86,9 +92,9 @@ waits on the channel while nothing is happening, so an idle source wakes nobody.
 
 ## What a listener receives, and a scenario for each
 
-The first notice after attaching is the present, whether or not anything
+The first notice after attaching is the snapshot, whether or not anything
 changed since before the listener attached — attaching late shows a running
-job as running, never a history to replay [WATCH-P1]. The same present twice is
+job as running, never a history to replay [WATCH-P1]. The same snapshot twice is
 not a change [WATCH-P2]; what counts as visible is the source's to say, and for a
 job record it is `JOB-N1` on [the job page](https://github.com/openabstractions/abstraction-job).
 
@@ -96,13 +102,13 @@ A listener that took nothing while several changes landed receives one notice
 carrying the latest, and the source never waited for it [WATCH-C1].
 
 Quiet is reported to a waiting listener once the budget has passed with nothing
-visible, carrying the present [WATCH-Q1]. It repeats each budget while the silence
+visible, carrying the snapshot [WATCH-Q1]. It repeats each budget while the silence
 lasts [WATCH-Q2], and a change ends the silence: the next one is measured from the
 change [WATCH-Q3]. A listener without a budget is never told quiet.
 
 After close a listener receives closed and nothing else; a change made after
 close is not delivered to it [WATCH-X1]. Two listeners on one source are
-independent: each has its own present, and taking a notice from one takes
+independent: each has its own snapshot, and taking a notice from one takes
 nothing from the other [WATCH-X2].
 
 **The listener's own wait is the only timer.** Quiet is judged by a listener
@@ -132,7 +138,7 @@ in the gate's series, which is not published yet, produced by
 
 What may break:
 
-- A source that cannot be read keeps the last good present rather than
+- A source that cannot be read keeps the last good snapshot rather than
   becoming empty, so a store that blinks does not empty a window.
 - `Next` and `Changes()` (Go) are two spellings of one stream; drive a
   subscription with one of them.

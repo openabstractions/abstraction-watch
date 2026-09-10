@@ -1,178 +1,82 @@
-# abstraction-watch
+# abstraction-watch, in Python
 
-**In development.** Tagged `go/v0.1.0`, but no conformance scenario cites this
-layer on its own, and the API carries no stability promise.
+Be told what is true now, and be told when nothing has changed for a while.
+A `Notice` carries the present; `quiet` says nothing visible has moved for at
+least the budget, and `silence` says for how long. One module, standard library
+only, importing nothing of ours.
 
-A notice is the present — what is true now, and whether it has stopped
-changing — so a listener that needs the absence of change is told it, instead
-of writing a loop that wakes up to check.
+Quiet is the half that is normally missing. A progress bar that stops moving and
+a transfer nobody is performing look identical to a listener that is only told
+about changes.
 
-## The problem
+This page is the Python package. The contract, the Go and C++ implementations,
+what is measured and what is `UNPROVEN` are on
+[the repository](https://github.com/openabstractions/abstraction-watch).
 
-Every platform can say a thing happened. None of them says a thing has *stopped*
-happening — a transfer whose owner died, a service that answered an hour ago, a
-lease nobody renewed — so every caller that needs the absence writes a loop that
-wakes up to check. Three of ours did in one week without noticing each other:
-`Deliver` ended on a record going quiet under a tick of its own, the keeper
-counted beats against a budget of its own, and the agent ledger's "still
-running" row was the same gap a third time. This layer is that loop, written
-once, with the absence as a first-class fact.
+## Install
 
-## Words
+Not on PyPI, and the name on PyPI is not ours.
 
+    git clone https://github.com/openabstractions/abstraction-watch
+    pip install ./abstraction-watch/python
+
+Python 3.9 or later. `abstraction_watch.py` is one file with no imports of ours,
+so copying it into a `_vendor/` directory of your own is an equally complete
+installation.
+
+## An example that runs
+
+A source that says when it moved, and a listener that hears both the change and
+the quiet after it:
+
+```python
+import abstraction_watch as watch
+
+progress = watch.push({"done": 0}, stamp="0", budget=0.5)
+progress.post({"done": 1 << 20}, stamp="1")
+
+notice = progress.next()
+print("now:", notice.now)
+
+notice = progress.next()
+print("quiet:", notice.quiet, "after", round(notice.silence, 1), "s of nothing")
+progress.close()
 ```
-now        what is true, as of the last read
-quiet      nothing visible has changed for at least the budget
-silence    for how long, by this observer's clock
-```
 
-| word | meaning |
+`budget=0.5` is the quiet budget and the only timer here: the listener's own wait
+decides when silence counts, so a change the source already made is always
+delivered ahead of a quiet that would postdate it.
+
+## What an application calls
+
+| call | what it does |
 |---|---|
-| **notice** | the present, not an event and not a history; a listener asks *what now?* and is answered with it |
-| **budget** | how long nothing visible may change before the listener is told quiet |
-| **visible** | what counts as a change is the source's to say; for a job record it is `JOB-N1` on [the job page](https://github.com/openabstractions/abstraction-job) |
-| **source** | polled (`Poll`: something that must be asked) or pushed (`Push`: something that says when it moved) |
-| **settle** | the same fact told from the source's side: run once the signals have stopped for the budget |
+| `push(first, stamp, budget)` | a subscription over a source that reports its own changes through `post` |
+| `poll(read, every, budget)` | a subscription over a source that has to be asked. `read` returns `(value, stamp)`; `every` is the interval between asks while a listener waits |
+| `Subscription.next(timeout=None)` | the next `Notice`: a change, or quiet once the budget passed with none |
+| `Subscription.current()` | what is true now, without waiting |
+| `Subscription.post(value, stamp)` | tell a `push` subscription the source moved |
+| `Subscription.close()` | end it. A waiting `next` raises `Closed` |
+| `settle(events, period, settled)` | call `settled` once a queue of platform notifications has been still for `period`, because one edit produces several of them |
 
-Rules on this page are tagged `WATCH-*`; the `notice-*` scenarios in
-[abstraction-download/testdata/scenarios](https://github.com/openabstractions/abstraction-download/tree/main/testdata/scenarios)
-cite them, and the behaviour harness reports which have no scenario.
+A subscription is iterable: `for notice in subscription: ...`, ending on `close()`.
+`stamp` is what decides whether a value is a change; two reads with the same stamp
+are one.
 
-## Obtain
+`abstraction_job.watch(store, kind, budget)` is this primitive with a job store as
+the source, which is what a download progress view binds to.
 
-- **Go.** `go get github.com/openabstractions/abstraction-watch/go`. No tag
-  yet; `go get` resolves a pseudo-version of `main`.
-- **Python.** Not on any index. `python/abstraction_watch.py` is one module
-  with no imports of ours; `python/pyproject.toml` builds a wheel
-  (`pip wheel python/`).
-- **C++.** Header only: `cpp/include` on the include path.
+## What may break
 
-## Example
+- **No conformance verdict, in any language.** No scenario in the suite cites
+  this layer yet — [what is proven and what is not](https://openabstractions.org/coverage.html).
+  Anything that depends on this layer inherits that.
+- **Not on any package index**, and no release carries an API stability promise.
+  Pin a commit you have read.
+- **`poll` asks; it does not subscribe to the platform.** There is no inotify,
+  no `ReadDirectoryChangesW` and no FSEvents under it. `settle` is the seam
+  where a caller supplies those.
+- Every published transcript was produced on Windows or Linux. macOS is
+  `UNPROVEN` throughout.
 
-**Go**
-
-```go
-sub := job.WatchQuiet(store, download.Kind, 2*ttl)
-defer sub.Close()
-for {
-    n, err := sub.Next(ctx)          // a change, or quiet once 2*ttl passed with none
-    if err != nil { return err }     // ctx, or watch.ErrClosed
-    if n.Quiet && nobodyHolds(n.Records) { return errAbandoned }
-}
-```
-
-**Python** — `for n in watch(store, KIND, budget=60): ...`, ending on `close()`.
-
-**C++** — `auto sub = abstraction::job::watch(store, kKind, 60s); while (auto n = sub.next()) ...`
-
-The generic primitive under those is `watch.Poll(read, every, budget)` for a
-source that must be asked and `watch.Push(first, stamp, budget)` for one that
-says when it moved; `job` supplies the source and what "visible" means.
-
-## Quiet from the source's side
-
-`watch.Settle(ctx, in, budget, settled)` is the same fact told the other way:
-`settled` runs once the signals on `in` have stopped for the budget, and never
-while they are still arriving. A platform notification is the case it exists
-for — a text editor saving a file produces several events and a subscriber
-wants one, and `config` uses it to turn `ReadDirectoryChangesW`, `inotify` and
-`kqueue` into a single answer.
-
-`Notice.Quiet` cannot serve here. It repeats every budget while the silence
-lasts (`WATCH-Q2` below), which is what a listener asking *has this stopped?* needs and
-exactly wrong for a debounce, which must fire once and then cost nothing. `Settle`
-waits on the channel while nothing is happening, so an idle source wakes nobody.
-**Go only so far**; Python and C++ have no caller for it yet.
-
-## What a listener receives, and a scenario for each
-
-The first notice after attaching is the present, whether or not anything
-changed since before the listener attached — attaching late shows a running
-job as running, never a history to replay [WATCH-P1]. The same present twice is
-not a change [WATCH-P2]; what counts as visible is the source's to say, and for a
-job record it is `JOB-N1` on [the job page](https://github.com/openabstractions/abstraction-job).
-
-A listener that took nothing while several changes landed receives one notice
-carrying the latest, and the source never waited for it [WATCH-C1].
-
-Quiet is reported to a waiting listener once the budget has passed with nothing
-visible, carrying the present [WATCH-Q1]. It repeats each budget while the silence
-lasts [WATCH-Q2], and a change ends the silence: the next one is measured from the
-change [WATCH-Q3]. A listener without a budget is never told quiet.
-
-After close a listener receives closed and nothing else; a change made after
-close is not delivered to it [WATCH-X1]. Two listeners on one source are
-independent: each has its own present, and taking a notice from one takes
-nothing from the other [WATCH-X2].
-
-**The listener's own wait is the only timer.** Quiet is judged by a listener
-that is waiting, after it has read, so a change the source already made is
-always delivered ahead of a quiet that would postdate it. A single-threaded
-driver cannot script a write that lands mid-wait, so this one is held by a
-unit test in each language rather than a scenario:
-`TestAPolledSourceIsReadBeforeSilenceIsJudged` in
-[`go/watch_test.go`](go/watch_test.go), its namesake in
-[`python/test_abstraction_watch.py`](python/test_abstraction_watch.py) and in
-[`cpp/test/test_watch.cpp`](cpp/test/test_watch.cpp).
-
-## Today
-
-- **Go**: `Poll`, `Push`, `Settle`; `job.WatchQuiet` and download's `Deliver`
-  sit on it.
-- **Python**: `watch(store, kind, budget)`.
-- **C++**: `abstraction::job::watch`.
-
-The file binding has nothing to push, so it is asked: on entry to `next`, and
-then every `every` while a listener waits — 750 ms for a job store, or the
-budget when that is shorter. A change therefore lands within one `every`, and
-quiet within one scheduler tick of the budget. The numbers are
-`notice_latency_p50_ms`, `notice_latency_p95_ms` and `quiet_overshoot_p95_ms`
-in the gate's series, which is not published yet, produced by
-[`measure/measure.sh`](measure/measure.sh).
-
-What may break:
-
-- A source that cannot be read keeps the last good present rather than
-  becoming empty, so a store that blinks does not empty a window.
-- `Next` and `Changes()` (Go) are two spellings of one stream; drive a
-  subscription with one of them.
-- A budget shorter than the store's poll interval shortens the interval to
-  match, so a store on a share is asked as often as the caller asked to be told.
-
-## Conformance
-
-The `notice-*` scenarios in
-[abstraction-download/testdata/scenarios](https://github.com/openabstractions/abstraction-download/tree/main/testdata/scenarios)
-are replayed by all three languages and diffed by
-[`behaviour-conformance.sh`](https://github.com/openabstractions/abstractions/blob/main/scripts/behaviour-conformance.sh) —
-[`BEHAVIOUR1.txt`](https://github.com/openabstractions/abstractions/blob/main/docs/results/BEHAVIOUR1.txt).
-The one rule a scenario cannot script is held by the named unit test in each
-language.
-
-## Where it sits
-
-Below: nothing of ours. Above:
-[abstraction-job](https://github.com/openabstractions/abstraction-job)
-supplies the source and what visible means,
-[abstraction-download](https://github.com/openabstractions/abstraction-download)
-waits for delivery on it, and
-[abstraction-rights](https://github.com/openabstractions/abstraction-rights)
-composes on it.
-
-One layer of [openabstractions](https://github.com/openabstractions/abstractions).
-Every layer names one thing local tools rebuild on their own; the name means the
-same in each language that implements it, and the conformance scenarios are what
-hold an implementation to it.
-
-## Requirements
-
-Go 1.22 or newer, standard library only. Python 3.9 or newer, standard library
-only. C++17: header-only, so `cpp/include` on the include path is enough, and
-`cpp/CMakeLists.txt` installs a `find_package` package for the layers above it:
-
-    find_package(abstraction_watch 0.1 CONFIG REQUIRED)
-    target_link_libraries(your_target PRIVATE abstraction::watch)
-
-## Licence
-
-Apache-2.0. See [LICENSE](https://github.com/openabstractions/abstraction-watch/blob/main/LICENSE).
+Apache-2.0. See [LICENSE](LICENSE).
