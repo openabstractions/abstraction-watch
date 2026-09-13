@@ -50,7 +50,7 @@
 #            command builds that zip from the published repository, adding
 #            the repository's root LICENSE unasked; no checkout here can
 #            reproduce it, so it is checked where it exists.
-#   C++      cmake --install of .split/<repo>/cpp into scratch, for the four
+#   C++      cmake --install of .split/<repo>/cpp into scratch, for the five
 #            layers that carry a project() of their own.
 #
 #   scripts/package.sh                   every language
@@ -65,6 +65,14 @@
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [ "${1:-}" = --help ] || { [ ! -f "$ROOT/scripts/split.manifest" ] && [ "$#" = 0 ]; }; then
+    printf '%s\n' 'Usage: sh scripts/package.sh [python go cpp] | --artifact FILE' 'Maintainer source: build selected package kinds (default: all) from .split and remote tags.' 'Published checkout: --artifact checks one built wheel, sdist or Go module zip. No publication.'
+    exit 0
+fi
+if [ ! -f "$ROOT/scripts/split.manifest" ] && [ "${1:-}" != --artifact ]; then
+    printf '%s\n' 'This checkout supports --artifact FILE only; aggregate builds require the maintainer source.' >&2
+    exit 2
+fi
 cd "$ROOT"
 ORG="${ABSTRACTION_ORG:-openabstractions}"
 SPLIT="${ABSTRACTION_SPLIT:-$ROOT/.split}"
@@ -110,6 +118,13 @@ SETUPTOOLS=""
 PIP_TARGETS_A_VENV=""
 [ -n "$PY" ] && "$PY" -m pip --help 2>/dev/null | grep -q -- '--python' && PIP_TARGETS_A_VENV=yes
 
+# Optional compiler choices from the gate; leave the caller's defaults alone
+# when these are absent. SDK PATH/INCLUDE/LIB remain inherited.
+cpp_cmake() (
+    [ "${ABSTRACTION_CPP_CC+x}" != x ] || export CC="$ABSTRACTION_CPP_CC"
+    [ "${ABSTRACTION_CPP_CXX+x}" != x ] || export CXX="$ABSTRACTION_CPP_CXX"
+    "$CMAKE" "$@"
+)
 CMAKE="${ABSTRACTION_CMAKE:-$(command -v cmake 2>/dev/null || true)}"
 for c in "/c/Program Files/Microsoft Visual Studio/18/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe" \
          "/c/Program Files/CMake/bin/cmake.exe"; do
@@ -269,7 +284,7 @@ if [ -d "$SPLIT" ]; then
     printf 'state: HEAD %s; .split generated %s minute(s) ago by scripts/split.sh; python %s setuptools %s; cmake %s\n\n' \
         "$COMMIT" "$split_age" "${PY:-none}" "${SETUPTOOLS:-none}" "${CMAKE:-none}"
 else
-    printf 'state: HEAD %s; no .split — run scripts/split.sh first; python %s; cmake %s\n\n' "$COMMIT" "${PY:-none}" "${CMAKE:-none}"
+    printf 'state: HEAD %s; no .split — run sh scripts/oa.sh split first; python %s; cmake %s\n\n' "$COMMIT" "${PY:-none}" "${CMAKE:-none}"
 fi
 
 # ---- Python -------------------------------------------------------------------
@@ -290,7 +305,7 @@ while IFS=' ' read -r repo short; do
     [ -n "$repo" ] || continue
     src="$SPLIT/$repo/python"
     if [ ! -f "$src/pyproject.toml" ]; then
-        record UNPROVEN "$repo: $src/pyproject.toml is not there — run scripts/split.sh, the wheel is built from the published image"
+        record UNPROVEN "$repo: $src/pyproject.toml is not there — run sh scripts/oa.sh split, the wheel is built from the published image"
         continue
     fi
     if [ -z "$PY" ] || [ -z "$SETUPTOOLS" ] || [ "${SETUPTOOLS%%.*}" -lt 77 ]; then
@@ -419,12 +434,11 @@ fi
 
 if want cpp; then
 printf '\n\033[1mC++ — cmake --install of the published layer, into scratch\033[0m\n'
-record ABSENT "abstraction-cas cpp: no CMakeLists.txt is published (split.manifest drops it) — the repository is the package; nothing to install"
-for repo in abstraction-download abstraction-job abstraction-storage abstraction-watch; do
+for repo in abstraction-cas abstraction-download abstraction-job abstraction-storage abstraction-watch; do
     name="abstraction_${repo#abstraction-}"
     src="$SPLIT/$repo/cpp"
     if [ ! -f "$src/CMakeLists.txt" ]; then
-        record UNPROVEN "$repo cpp: $src/CMakeLists.txt is not there — run scripts/split.sh"
+        record UNPROVEN "$repo cpp: $src/CMakeLists.txt is not there — run sh scripts/oa.sh split"
         continue
     fi
     if [ -z "$CMAKE" ]; then
@@ -432,15 +446,15 @@ for repo in abstraction-download abstraction-job abstraction-storage abstraction
         continue
     fi
     b="$WORK/cpp-$repo"
-    if ! "$CMAKE" -S "$src" -B "$b/build" -DABSTRACTION_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release > "$b.configure.log" 2>&1; then
+    if ! cpp_cmake -S "$src" -B "$b/build" -DABSTRACTION_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release > "$b.configure.log" 2>&1; then
         record FAIL "$repo cpp: does not configure from the published sources — $(grep -A3 'CMake Error' "$b.configure.log" | sed '1d; /^Call Stack/,$d' | tr -s ' \n' ' ')"
         continue
     fi
-    if ! "$CMAKE" --build "$b/build" --config Release > "$b.build.log" 2>&1; then
+    if ! cpp_cmake --build "$b/build" --config Release > "$b.build.log" 2>&1; then
         record FAIL "$repo cpp: does not build — $(grep -m1 -i ' error ' "$b.build.log")"
         continue
     fi
-    if ! "$CMAKE" --install "$b/build" --config Release --prefix "$b/prefix" > "$b.install.log" 2>&1; then
+    if ! cpp_cmake --install "$b/build" --config Release --prefix "$b/prefix" > "$b.install.log" 2>&1; then
         record FAIL "$repo cpp: does not install — $(tail -1 "$b.install.log")"
         continue
     fi

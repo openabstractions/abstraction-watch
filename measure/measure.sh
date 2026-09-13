@@ -1,7 +1,7 @@
 #!/bin/sh
 # What waiting on a job store costs, measured rather than described.
 #
-# Runs the instrument in job/go/watch_measure_test.go against a real file store
+# Runs the instrument in openabstractions-flat/abstraction-job/go/watch_measure_test.go against a real file store
 # on this machine and records: how long after a write a waiting listener is
 # told (the file binding is asked every 750 ms, so this is the poll interval's
 # distribution plus the read), how far past its budget a quiet notice lands, and
@@ -16,12 +16,12 @@ SERIES="$ROOT/research/gate/series.tsv"
 DATE="$(date +%Y-%m-%d)"
 COMMIT="$(git -C "$ROOT" rev-parse --short HEAD)"
 
-raw="$(cd "$ROOT/job/go" && WATCH_MEASURE=1 go test -count=1 -run TestMeasureWatch . -v 2>&1 | grep -E '^(records|[a-z_]+_(p50|p95)_ms)[[:space:]]')"
+raw="$(cd "$ROOT/openabstractions-flat/abstraction-job/go" && WATCH_MEASURE=1 go test -count=1 -run TestMeasureWatch . -v 2>&1 | grep -E '^(records|[a-z_]+_(p50|p95)_ms)[[:space:]]')"
 
 {
     echo "watch: what waiting on a file-bound job store costs"
     echo "date $DATE  commit $COMMIT  host $(uname -s) $(uname -m)  go $(go version | cut -d' ' -f3)"
-    echo "instrument job/go/watch_measure_test.go (WATCH_MEASURE=1); poll interval 750 ms; quiet budget 100 ms; store in the OS temp directory"
+    echo "instrument openabstractions-flat/abstraction-job/go/watch_measure_test.go (WATCH_MEASURE=1); poll interval 750 ms; quiet budget 100 ms; store in the OS temp directory"
     echo
     echo "$raw"
     echo
