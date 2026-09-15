@@ -134,7 +134,7 @@ budget when that is shorter. A change therefore lands within one `every`, and
 quiet within one scheduler tick of the budget. The numbers are
 `notice_latency_p50_ms`, `notice_latency_p95_ms` and `quiet_overshoot_p95_ms`
 in the gate's series, which is not published yet, produced by
-[`measure/measure.sh`](measure/measure.sh).
+`measure/measure.sh`.
 
 What may break:
 

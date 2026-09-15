@@ -136,16 +136,25 @@ inline const std::vector<std::string> kLifecycleOperations = {"Poll", "Push", "P
 
 inline const std::vector<std::string> kFailureNames = {"closed"};
 
+// Quiet means no visible change for at least the configured budget. Silence is
+// elapsed monotonic observer duration in nanoseconds. This is metadata of
+// Notice<T>; arbitrary native T is not serialized or replaced by this
+// descriptor.
 struct NoticeMetadata {
     bool quiet = false;
     std::int64_t silence_ns = 0;
 };
 
+// Polling interval and quiet budget in nanoseconds. Existing native provider
+// normalization applies. Clock origins are never transferred.
 struct WatchOptions {
     std::int64_t every_ns = 0;
     std::int64_t budget_ns = 0;
 };
 
+// Opaque change token supplied beside a native payload by Source<T> or Post. A
+// changed stamp denotes a visible change; it is not an authority or global
+// timestamp.
 struct Stamp {
     std::string value;
 };

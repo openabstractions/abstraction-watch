@@ -191,16 +191,25 @@ var LifecycleOperations = []string{"Poll", "Push", "Post", "Current", "Next", "C
 
 var FailureNames = []string{"closed"}
 
+// Quiet means no visible change for at least the configured budget. Silence is
+// elapsed monotonic observer duration in nanoseconds. This is metadata of
+// Notice<T>; arbitrary native T is not serialized or replaced by this
+// descriptor.
 type NoticeMetadata struct {
 	Quiet     bool
 	SilenceNs int64
 }
 
+// Polling interval and quiet budget in nanoseconds. Existing native provider
+// normalization applies. Clock origins are never transferred.
 type WatchOptions struct {
 	EveryNs  int64
 	BudgetNs int64
 }
 
+// Opaque change token supplied beside a native payload by Source<T> or Post. A
+// changed stamp denotes a visible change; it is not an authority or global
+// timestamp.
 type Stamp struct {
 	Value string
 }

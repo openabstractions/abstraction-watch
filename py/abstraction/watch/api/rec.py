@@ -119,18 +119,27 @@ LIFECYCLE_OPERATIONS = ["Poll", "Push", "Post", "Current", "Next", "Close", "Set
 FAILURE_NAMES = ["closed"]
 
 
+# Quiet means no visible change for at least the configured budget. Silence is
+# elapsed monotonic observer duration in nanoseconds. This is metadata of
+# Notice<T>; arbitrary native T is not serialized or replaced by this
+# descriptor.
 class NoticeMetadata:
     def __init__(self, **kw):
         self.quiet = kw.get("quiet", False)
         self.silence_ns = kw.get("silence_ns", 0)
 
 
+# Polling interval and quiet budget in nanoseconds. Existing native provider
+# normalization applies. Clock origins are never transferred.
 class WatchOptions:
     def __init__(self, **kw):
         self.every_ns = kw.get("every_ns", 0)
         self.budget_ns = kw.get("budget_ns", 0)
 
 
+# Opaque change token supplied beside a native payload by Source<T> or Post. A
+# changed stamp denotes a visible change; it is not an authority or global
+# timestamp.
 class Stamp:
     def __init__(self, **kw):
         self.value = kw.get("value", "")
