@@ -20,10 +20,15 @@ target_compile_features(abstraction_watch INTERFACE cxx_std_17)
 set_target_properties(abstraction_watch PROPERTIES EXPORT_NAME watch)
 add_library(abstraction::watch ALIAS abstraction_watch)
 
-# This layer's only C++ test reaches into the job layer, so it is built where
-# both are present -- the root CMakeLists.txt -- and a standalone build of this
-# directory has no test to run. Said here because a directory that configures,
-# builds and reports zero tests otherwise reads as a pass.
+option(ABSTRACTION_BUILD_TESTS "Build the abstraction's own tests"
+    ${ABSTRACTION_WATCH_STANDALONE})
+
+if(ABSTRACTION_BUILD_TESTS)
+    enable_testing()
+    add_executable(test_watch test/test_watch.cpp)
+    target_link_libraries(test_watch PRIVATE abstraction_watch)
+    add_test(NAME Watch COMMAND test_watch)
+endif()
 
 if(ABSTRACTION_WATCH_STANDALONE)
     include(CMakePackageConfigHelpers)

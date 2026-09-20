@@ -1,15 +1,11 @@
-#include <abstraction/job/store.h>
-#include <abstraction/job/watch.h>
 #include <abstraction/watch/watch.h>
 
 #include <chrono>
 #include <cstdio>
-#include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <thread>
 
-namespace fs = std::filesystem;
 using abstraction::watch::Millis;
 using Sub = abstraction::watch::Subscription<std::string>;
 
@@ -113,43 +109,6 @@ static void a_timeout_ends_a_wait() {
     check("a timeout ends a wait without closing", !n && !s->closed());
 }
 
-static fs::path temp_root() {
-    const auto stamp = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                           std::chrono::system_clock::now().time_since_epoch())
-                           .count();
-    const fs::path root = fs::temp_directory_path() / ("abstraction-watch-test-" + std::to_string(stamp));
-    fs::create_directories(root);
-    return root;
-}
-
-static std::string submit(abstraction::job::FileStore& store, const std::string& kind) {
-    abstraction::job::Record r;
-    r.kind = kind;
-    r.spec = abstraction::job::Json::parse(R"({"what":"anything"})");
-    return store.submit(std::move(r));
-}
-
-static void a_job_watch_reports_quiet_only_when_nothing_visible_moved() {
-    const fs::path root = temp_root();
-    abstraction::job::FileStore store(root.string());
-    const std::string id = submit(store, "test");
-    submit(store, "something-else");
-    auto sub = abstraction::job::watch(store, "test", Millis{200});
-    check("a job watch sees work that predates it, of its kind only",
-          sub.records().size() == 1 && sub.records()[0].id == id);
-    sub.next();
-    const auto held = store.claim(id, "owner", Millis{60000});
-    auto n = sub.next();
-    check("a claim is a change", n && !n->quiet && n->records.size() == 1 &&
-                                    n->records[0].state == abstraction::job::state::kRunning);
-    store.renew(id, held.lease.epoch, Millis{120000});
-    auto q = sub.next();
-    check("a renewal is invisible, so the next notice is quiet", q && q->quiet && q->silence >= Millis{200});
-    sub.close();
-    check("a closed job watch says so", !sub.next() && sub.closed());
-    fs::remove_all(root);
-}
-
 int main() {
     first_notice_is_the_present();
     several_changes_coalesce_into_the_latest();
@@ -160,7 +119,6 @@ int main() {
     a_polled_source_keeps_the_last_good_present_through_an_error();
     closed_ends_a_wait_and_everything_after_it();
     a_timeout_ends_a_wait();
-    a_job_watch_reports_quiet_only_when_nothing_visible_moved();
     std::printf("%d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;
 }

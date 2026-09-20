@@ -76,23 +76,10 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      # This layer's go module depends on nothing, but its python and c++ tests
-      # assert what a watch does to a job, so they need the layer above. The
-      # runner is laid out the way a reader lays out clones.
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-        with:
-          path: abstraction-watch
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-        with:
-          repository: openabstractions/abstraction-job
-          path: abstraction-job
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-        with:
-          repository: openabstractions/abstraction-cas
-          path: abstraction-cas
 
       - name: test
-        working-directory: abstraction-watch/python
+        working-directory: python
         run: |
           PY="$(command -v python3 || command -v python || true)"
           if [ -z "$PY" ]; then
@@ -101,15 +88,12 @@ jobs:
             exit 0
           fi
           "$PY" --version
-          sep=':'
-          [ "$RUNNER_OS" = Windows ] && sep=';'
-          export PYTHONPATH="$GITHUB_WORKSPACE/abstraction-job/python${sep}$GITHUB_WORKSPACE/abstraction-cas/python"
           "$PY" -m unittest discover -p 'test_*.py' 2>&1 | tee out.txt
           if grep -q '^Ran 0 tests' out.txt; then
             printf 'FAIL  discovery found no test to run, and unittest calls that a pass\n'
             exit 1
           fi
-          printf '%s: python, %s tests, with abstraction-job and abstraction-cas beside it\n' \
+          printf '%s: python, %s tests\n' \
             "$RUNNER_OS" "$(sed -n 's/^Ran \([0-9]*\) tests\?.*/\1/p' out.txt | tail -1)" >> "$GITHUB_STEP_SUMMARY"
 
   cpp:
@@ -120,22 +104,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-        with:
-          path: abstraction-watch
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-        with:
-          repository: openabstractions/abstraction-job
-          path: abstraction-job
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-        with:
-          repository: openabstractions/abstraction-cas
-          path: abstraction-cas
 
-      # This layer publishes headers and no source of its own; every object
-      # linked below belongs to the layer above, because what is under test is
-      # what a watch observes a job doing.
+      # This layer publishes headers and no source of its own; the test is one
+      # translation unit against them.
       - name: compile and run
-        working-directory: abstraction-watch
         run: |
           CXX="$(command -v g++ || command -v clang++ || true)"
           if [ -z "$CXX" ]; then
@@ -153,13 +125,7 @@ jobs:
             # dies in the loader before main: no output, no message, exit 127.
             case "$("$CXX" --version | head -1)" in *g++*) static=-static ;; esac
           fi
-          "$CXX" -std=c++17 -I cpp/include \
-            -I ../abstraction-job/cpp/include -I ../abstraction-cas/cpp/include \
-            cpp/test/test_watch.cpp \
-            ../abstraction-job/cpp/src/json.cpp ../abstraction-job/cpp/src/record.cpp \
-            ../abstraction-job/cpp/src/ranges.cpp ../abstraction-job/cpp/src/store.cpp \
-            ../abstraction-job/cpp/src/awake.cpp \
-            ../abstraction-cas/cpp/src/cas.cpp -o "$out" $static
+          "$CXX" -std=c++17 -pthread -I cpp/include cpp/test/test_watch.cpp -o "$out" $static
           code=0
           "./$out" | tee out.txt || code=$?
           n=$(grep -c PASS out.txt || true)
@@ -187,5 +153,4 @@ jobs:
             printf -- '- MSVC. The c++ job takes whichever of g++ or clang++ is on PATH\n'
             printf -- '- measure/, which is a record of measurements taken elsewhere and is not re-run here\n'
             printf -- '- any signed or installed artefact\n'
-            printf -- '- the siblings at any pinned revision. python and c++ take abstraction-job and abstraction-cas at their default branch, so this is a statement about today.\n'
           } >> "$GITHUB_STEP_SUMMARY"

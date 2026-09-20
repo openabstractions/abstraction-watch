@@ -1,14 +1,18 @@
 # abstraction-watch
 
-**In development.** No conformance scenario cites this layer on its own, and the
-API carries no stability promise. Tags exist and no version number is typed on
-this page: [the tag list](https://github.com/openabstractions/abstraction-watch/tags)
-is the answer to "which release", because a tag is the only thing that cannot
-drift.
+Tell a consumer what is true now and when that visible state has stopped
+changing for a chosen time. Providers use this to recognize a stalled transfer,
+a quiet lease or a burst of filesystem changes without each writing its own
+polling loop. `Poll`, `Push` and `Settle` cover common source styles.
 
-A notice is the snapshot — what is true now, and whether it has stopped
-changing — so a listener that needs the absence of change is told it, instead
-of writing a loop that wakes up to check.
+A notice carries what is true now and whether it has stopped changing. It is a
+snapshot rather than an event history. Capability services with generated
+cursor/gap observation contracts use those service APIs at the application
+boundary.
+
+**In development.** No standalone conformance scenario or stability promise.
+Pin a reviewed entry from
+[the tag list](https://github.com/openabstractions/abstraction-watch/tags).
 
 ## The problem
 
@@ -67,11 +71,7 @@ for {
 }
 ```
 
-**Python** — `for n in watch(store, KIND, budget=60): ...`, ending on `close()`.
-
-**C++** — `auto sub = abstraction::job::watch(store, kKind, 60s); while (auto n = sub.next()) ...`
-
-The generic primitive under those is `watch.Poll(read, every, budget)` for a
+The generic primitive under that is `watch.Poll(read, every, budget)` for a
 source that must be asked and `watch.Push(first, stamp, budget)` for one that
 says when it moved; `job` supplies the source and what "visible" means.
 
@@ -125,8 +125,8 @@ unit test in each language rather than a scenario:
 
 - **Go**: `Poll`, `Push`, `Settle`; `job.WatchQuiet` and download's `Deliver`
   sit on it.
-- **Python**: `watch(store, kind, budget)`.
-- **C++**: `abstraction::job::watch`.
+- **Python**: `poll`, `push`, `settle`.
+- **C++**: `Subscription::poll`, `Subscription::push`.
 
 The file binding has nothing to push, so it is asked: on entry to `next`, and
 then every `every` while a listener waits — 750 ms for a job store, or the
@@ -149,8 +149,8 @@ What may break:
 
 The `notice-*` scenarios in
 [abstraction-download/testdata/scenarios](https://github.com/openabstractions/abstraction-download/tree/main/testdata/scenarios)
-are replayed by all three languages and diffed by
-[`behaviour-conformance.sh`](https://github.com/openabstractions/abstractions/blob/main/scripts/behaviour-conformance.sh) —
+are replayed by the Go implementation and judged by
+the internal `behaviour-conformance.sh` maintainer check —
 [`BEHAVIOUR1.txt`](https://github.com/openabstractions/abstractions/blob/main/docs/results/BEHAVIOUR1.txt).
 The one rule a scenario cannot script is held by the named unit test in each
 language.

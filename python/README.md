@@ -63,9 +63,6 @@ A subscription is iterable: `for notice in subscription: ...`, ending on `close(
 `stamp` is what decides whether a value is a change; two reads with the same stamp
 are one.
 
-`abstraction_job.watch(store, kind, budget)` is this primitive with a job store as
-the source, which is what a download progress view binds to.
-
 ## What may break
 
 - **No conformance verdict, in any language.** No scenario in the suite cites

@@ -15,6 +15,46 @@ namespace abstraction::watch::api {
 
 using Raw = std::string;
 
+class Refusal : public std::runtime_error {
+public:
+    Refusal(const char* word, std::size_t offset)
+        : std::runtime_error(std::string("refused: ") + word + " at byte " + std::to_string(offset)),
+          word(word),
+          offset(offset) {}
+    const char* word;
+    std::size_t offset;
+};
+
+inline const std::vector<std::string> kLifecycleOperations = {"Poll", "Push", "Post", "Current", "Next", "Close", "Settle"};
+
+inline const std::vector<std::string> kFailureNames = {"closed"};
+
+// Quiet means no visible change for at least the configured budget. Silence is
+// elapsed monotonic observer duration in nanoseconds. This is metadata of
+// Notice<T>; arbitrary native T is not serialized or replaced by this
+// descriptor.
+struct NoticeMetadata {
+    bool quiet = false;
+    std::int64_t silence_ns = 0;
+};
+
+// Polling interval and quiet budget in nanoseconds. Existing native provider
+// normalization applies. Clock origins are never transferred.
+struct WatchOptions {
+    std::int64_t every_ns = 0;
+    std::int64_t budget_ns = 0;
+};
+
+// Opaque change token supplied beside a native payload by Source<T> or Post. A
+// changed stamp denotes a visible change; it is not an authority or global
+// timestamp.
+struct Stamp {
+    std::string value;
+};
+
+// Codec machinery. Nothing here is API; it may change in any release.
+namespace detail {
+
 inline void esc(std::string& out, const std::string& s);
 
 inline void esc_byte(std::string& out, unsigned char c) {
@@ -56,6 +96,8 @@ inline void strs(std::string& out, const std::vector<std::string>& v, int depth)
     pad(out, depth);
     out += ']';
 }
+
+
 
 inline bool ws(unsigned char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
 
@@ -131,35 +173,11 @@ inline void esc(std::string& out, const std::string& s) {
     for (unsigned char c : s) esc_byte(out, c);
     out += '"';
 }
+inline void enc_notice_metadata(std::string&, const NoticeMetadata&, int);
+inline void enc_watch_options(std::string&, const WatchOptions&, int);
+inline void enc_stamp(std::string&, const Stamp&, int);
 
-inline const std::vector<std::string> kLifecycleOperations = {"Poll", "Push", "Post", "Current", "Next", "Close", "Settle"};
-
-inline const std::vector<std::string> kFailureNames = {"closed"};
-
-// Quiet means no visible change for at least the configured budget. Silence is
-// elapsed monotonic observer duration in nanoseconds. This is metadata of
-// Notice<T>; arbitrary native T is not serialized or replaced by this
-// descriptor.
-struct NoticeMetadata {
-    bool quiet = false;
-    std::int64_t silence_ns = 0;
-};
-
-// Polling interval and quiet budget in nanoseconds. Existing native provider
-// normalization applies. Clock origins are never transferred.
-struct WatchOptions {
-    std::int64_t every_ns = 0;
-    std::int64_t budget_ns = 0;
-};
-
-// Opaque change token supplied beside a native payload by Source<T> or Post. A
-// changed stamp denotes a visible change; it is not an authority or global
-// timestamp.
-struct Stamp {
-    std::string value;
-};
-
-inline void enc_noticemetadata(std::string& out, const NoticeMetadata& v, int depth) {
+inline void enc_notice_metadata(std::string& out, const NoticeMetadata& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
@@ -177,7 +195,7 @@ inline void enc_noticemetadata(std::string& out, const NoticeMetadata& v, int de
     out += '}';
 }
 
-inline void enc_watchoptions(std::string& out, const WatchOptions& v, int depth) {
+inline void enc_watch_options(std::string& out, const WatchOptions& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
@@ -207,25 +225,8 @@ inline void enc_stamp(std::string& out, const Stamp& v, int depth) {
     out += '}';
 }
 
-inline std::string encode(const NoticeMetadata& v) {
-    std::string out;
-    enc_noticemetadata(out, v, 0);
-    out += '\n';
-    return out;
-}
-
 inline constexpr int kDepthLimit = 64;
 inline constexpr std::size_t kI64Digits = 19;
-
-class Refusal : public std::runtime_error {
-public:
-    Refusal(const char* word, std::size_t offset)
-        : std::runtime_error(std::string("refused: ") + word + " at byte " + std::to_string(offset)),
-          word(word),
-          offset(offset) {}
-    const char* word;
-    std::size_t offset;
-};
 
 inline void append_rune(std::string& out, std::uint32_t cp) {
     if (cp < 0x80) {
@@ -519,11 +520,11 @@ struct Reader {
     }
 };
 
-inline NoticeMetadata decode_noticemetadata(Reader& r);
-inline WatchOptions decode_watchoptions(Reader& r);
+inline NoticeMetadata decode_notice_metadata(Reader& r);
+inline WatchOptions decode_watch_options(Reader& r);
 inline Stamp decode_stamp(Reader& r);
 
-inline NoticeMetadata decode_noticemetadata(Reader& r) {
+inline NoticeMetadata decode_notice_metadata(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -562,7 +563,7 @@ inline NoticeMetadata decode_noticemetadata(Reader& r) {
     return v;
 }
 
-inline WatchOptions decode_watchoptions(Reader& r) {
+inline WatchOptions decode_watch_options(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -636,15 +637,25 @@ inline Stamp decode_stamp(Reader& r) {
     return v;
 }
 
+}  // namespace detail
+
+inline std::string encode(const NoticeMetadata& v) {
+    std::string out;
+    detail::enc_notice_metadata(out, v, 0);
+    out += '\n';
+    return out;
+}
+
 inline NoticeMetadata decode(std::string_view data) {
-    Reader r{data};
+    detail::Reader r{data};
     r.skip_ws();
-    NoticeMetadata v = decode_noticemetadata(r);
+    NoticeMetadata v = detail::decode_notice_metadata(r);
     r.skip_ws();
     if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
     return v;
 }
 
+namespace detail {
 // kRefusals is in the order two of them are chosen between.
 inline const std::vector<std::string> kRefusals = {"malformed", "bad_string", "number_spelling", "wrong_type", "depth_exceeded", "duplicate_key", "duplicate_field", "unknown_field", "missing_field", "trailing_bytes"};
 
@@ -653,5 +664,6 @@ inline int refusal_rank(std::string_view word) {
         if (kRefusals[i] == word) return static_cast<int>(i);
     return -1;
 }
+}  // namespace detail
 
 }  // namespace abstraction::watch::api
