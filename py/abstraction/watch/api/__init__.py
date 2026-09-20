@@ -11,6 +11,8 @@ from ._codec import (
     WatchOptions,
     decode,
     encode,
+    from_json,
+    to_json,
 )
 
 __all__ = [
@@ -22,6 +24,8 @@ __all__ = [
     "WatchOptions",
     "decode",
     "encode",
+    "from_json",
+    "to_json",
 ]
 
 # Report every class and function as a member of this package, so help(),

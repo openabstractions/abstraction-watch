@@ -73,64 +73,18 @@ func strs(out []byte, v []string, depth int) []byte {
 	return append(out, ']')
 }
 
+// raw writes an opaque value's bytes as they are ([DEF-A3]); whitespace
+// around the value is not part of it.
 func raw(out []byte, s string, depth int) []byte {
 	ws := func(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
-	for i := 0; i < len(s); {
-		c := s[i]
-		if ws(c) {
-			i++
-			continue
-		}
-		switch c {
-		case '"':
-			j := i + 1
-			for j < len(s) {
-				if s[j] == '\\' {
-					j += 2
-					continue
-				}
-				if s[j] == '"' {
-					j++
-					break
-				}
-				j++
-			}
-			out = append(out, s[i:j]...)
-			i = j
-		case '{', '[':
-			out = append(out, c)
-			i++
-			j := i
-			for j < len(s) && ws(s[j]) {
-				j++
-			}
-			if j < len(s) && (s[j] == '}' || s[j] == ']') {
-				out = append(out, s[j])
-				i = j + 1
-			} else {
-				depth++
-				out = append(out, '\n')
-				out = pad(out, depth)
-			}
-		case '}', ']':
-			depth--
-			out = append(out, '\n')
-			out = pad(out, depth)
-			out = append(out, c)
-			i++
-		case ',':
-			out = append(out, ',', '\n')
-			out = pad(out, depth)
-			i++
-		case ':':
-			out = append(out, ':', ' ')
-			i++
-		default:
-			out = append(out, c)
-			i++
-		}
+	i, j := 0, len(s)
+	for i < j && ws(s[i]) {
+		i++
 	}
-	return out
+	for j > i && ws(s[j-1]) {
+		j--
+	}
+	return append(out, s[i:j]...)
 }
 
 func byteLess(a, b string) bool {
@@ -191,15 +145,17 @@ var LifecycleOperations = []string{"Poll", "Push", "Post", "Current", "Next", "C
 
 var FailureNames = []string{"closed"}
 
+// [NoticeMetadata](https://openabstractions.github.io/reference.html#concept-watch.notice-metadata).
 // Quiet means no visible change for at least the configured budget. Silence is
 // elapsed monotonic observer duration in nanoseconds. This is metadata of
-// Notice<T>; arbitrary native T is not serialized or replaced by this
-// descriptor.
+// [Notice<T>](https://openabstractions.github.io/reference.html#concept-notice);
+// arbitrary native T is not serialized or replaced by this descriptor.
 type NoticeMetadata struct {
 	Quiet     bool
 	SilenceNs int64
 }
 
+// [WatchOptions](https://openabstractions.github.io/reference.html#concept-watch.subscription-options).
 // Polling interval and quiet budget in nanoseconds. Existing native provider
 // normalization applies. Clock origins are never transferred.
 type WatchOptions struct {
@@ -207,9 +163,11 @@ type WatchOptions struct {
 	BudgetNs int64
 }
 
-// Opaque change token supplied beside a native payload by Source<T> or Post. A
-// changed stamp denotes a visible change; it is not an authority or global
-// timestamp.
+// [Stamp](https://openabstractions.github.io/reference.html#concept-watch.change-stamp).
+// Opaque change token supplied beside a native payload by
+// [Source<T>](https://openabstractions.github.io/reference.html#concept-watch.source)
+// or Post. A changed stamp denotes a visible change; it is not an authority or
+// global timestamp.
 type Stamp struct {
 	Value string
 }
@@ -284,9 +242,22 @@ func decimal(n int64) string { return string(num(nil, n)) }
 const depthLimit = 64
 
 type reader struct {
-	buf   []byte
-	pos   int
-	depth int
+	buf     []byte
+	pos     int
+	depth   int
+	limit   int
+	ceiling int
+}
+
+func (r *reader) depthLimit() int {
+	ceiling := depthLimit
+	if r.ceiling > 0 {
+		ceiling = r.ceiling
+	}
+	if r.limit > 0 && r.limit < ceiling {
+		return r.limit
+	}
+	return ceiling
 }
 
 func (r *reader) refuse(word string) error { return &Refusal{Word: word, Offset: r.pos} }
@@ -311,7 +282,7 @@ func (r *reader) ws() {
 
 func (r *reader) enter() error {
 	r.depth++
-	if r.depth > depthLimit {
+	if r.depth > r.depthLimit() {
 		return r.refuse("depth_exceeded")
 	}
 	return nil
@@ -958,6 +929,97 @@ func Decode(in []byte) (*NoticeMetadata, error) {
 		return nil, r.refuse("trailing_bytes")
 	}
 	return v, nil
+}
+
+// ToJSON writes one record of this package, given as a value or a pointer,
+// as JSON laid out as its documents are and without the document terminator.
+// Anything else, a nil pointer included, is refused with wrong_type.
+func ToJSON(v any) (out []byte, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			if e, ok := p.(*Refusal); ok {
+				out, err = nil, e
+				return
+			}
+			panic(p)
+		}
+	}()
+	switch v := v.(type) {
+	case NoticeMetadata:
+		return encNoticeMetadata(nil, &v, 0), nil
+	case *NoticeMetadata:
+		if v == nil {
+			return nil, &Refusal{Word: "wrong_type"}
+		}
+		return encNoticeMetadata(nil, v, 0), nil
+	case WatchOptions:
+		return encWatchOptions(nil, &v, 0), nil
+	case *WatchOptions:
+		if v == nil {
+			return nil, &Refusal{Word: "wrong_type"}
+		}
+		return encWatchOptions(nil, v, 0), nil
+	case Stamp:
+		return encStamp(nil, &v, 0), nil
+	case *Stamp:
+		if v == nil {
+			return nil, &Refusal{Word: "wrong_type"}
+		}
+		return encStamp(nil, v, 0), nil
+	}
+	return nil, &Refusal{Word: "wrong_type"}
+}
+
+// FromJSON reads one record from data into v, a pointer to a record of this
+// package. A refused input returns *Refusal.
+func FromJSON(data []byte, v any) error {
+	r := &reader{buf: data}
+	r.ws()
+	switch p := v.(type) {
+	case *NoticeMetadata:
+		if p == nil {
+			return &Refusal{Word: "wrong_type"}
+		}
+		x, err := r.decodeNoticeMetadata()
+		if err != nil {
+			return err
+		}
+		r.ws()
+		if r.pos < len(r.buf) {
+			return r.refuse("trailing_bytes")
+		}
+		*p = *x
+		return nil
+	case *WatchOptions:
+		if p == nil {
+			return &Refusal{Word: "wrong_type"}
+		}
+		x, err := r.decodeWatchOptions()
+		if err != nil {
+			return err
+		}
+		r.ws()
+		if r.pos < len(r.buf) {
+			return r.refuse("trailing_bytes")
+		}
+		*p = *x
+		return nil
+	case *Stamp:
+		if p == nil {
+			return &Refusal{Word: "wrong_type"}
+		}
+		x, err := r.decodeStamp()
+		if err != nil {
+			return err
+		}
+		r.ws()
+		if r.pos < len(r.buf) {
+			return r.refuse("trailing_bytes")
+		}
+		*p = *x
+		return nil
+	}
+	return &Refusal{Word: "wrong_type"}
 }
 
 // refusals is in the order two of them are chosen between.

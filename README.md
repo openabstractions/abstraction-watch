@@ -1,20 +1,21 @@
 # abstraction-watch
 
-Tell a consumer what is true now and when that visible state has stopped
+*For provider implementers. An application uses a capability service's own
+cursor/gap observation contract; one reading job progress calls the job
+service's `ObserveWork`.*
+
+A debounce and settle helper: it tells a consumer what is true now and when that visible state has stopped
 changing for a chosen time. Providers use this to recognize a stalled transfer,
 a quiet lease or a burst of filesystem changes without each writing its own
 polling loop. `Poll`, `Push` and `Settle` cover common source styles.
+
+**What's new here:** Settling is an event: a consumer gets the current state,
+then one [notice](https://openabstractions.github.io/reference.html#concept-notice) once a burst of changes has gone quiet.
 
 A notice carries what is true now and whether it has stopped changing. It is a
 snapshot rather than an event history. Capability services with generated
 cursor/gap observation contracts use those service APIs at the application
 boundary.
-
-**In development.** No standalone conformance scenario or stability promise.
-Pin a reviewed entry from
-[the tag list](https://github.com/openabstractions/abstraction-watch/tags).
-
-## The problem
 
 Every platform can say a thing happened. None of them says a thing has *stopped*
 happening — a transfer whose owner died, a service that answered an hour ago, a
@@ -23,7 +24,10 @@ wakes up to check. Three of ours did in one week without noticing each other:
 `Deliver` ended on a record going quiet under a tick of its own, the keeper
 counted beats against a budget of its own, and the agent ledger's "still
 running" row was the same gap a third time. This layer is that loop, written
-once, with the absence as a first-class fact.
+once, with the absence as a first-class fact. The example is in
+[Example](#example).
+
+The conventions every OA contract carries are stated once in [CONVENTIONS.md](https://github.com/openabstractions/abstractions/blob/main/idl/CONVENTIONS.md); a rule here that applies one cites its `CONV-` id.
 
 ## Words
 
@@ -38,14 +42,18 @@ silence    for how long, by this observer's clock
 | **notice** | the snapshot, not an event and not a history; a listener asks *what now?* and is answered with it |
 | **budget** | how long nothing visible may change before the listener is told quiet |
 | **visible** | what counts as a change is the source's to say; for a job record it is `JOB-N1` on [the job page](https://github.com/openabstractions/abstraction-job) |
-| **source** | polled (`Poll`: something that must be asked) or pushed (`Push`: something that says when it moved) |
+| **source** | polled (`Poll`: [something that must be asked](https://openabstractions.github.io/reference.html#concept-watch.source)) or pushed (`Push`: something that says when it moved) |
+| **unavailable** | the last read of a polled source failed; the notice carries the last good snapshot |
+| **unread** | how long since the last successful read, by this observer's clock |
 | **settle** | the same fact told from the source's side: run once the signals have stopped for the budget |
 
-Rules on this page are tagged `WATCH-*`; the `notice-*` scenarios in
+Rules are tagged `WATCH-*` on [CONTRACT.md](CONTRACT.md); the `notice-*` scenarios in
 [abstraction-download/testdata/scenarios](https://github.com/openabstractions/abstraction-download/tree/main/testdata/scenarios)
 cite them, and the behaviour harness reports which have no scenario.
 
 ## Obtain
+
+Install the runtime first: https://openabstractions.org/adopt.html
 
 - **Go.** `go get github.com/openabstractions/abstraction-watch/go`.
   [Releases, newest first](https://github.com/openabstractions/abstraction-watch/tags);
@@ -85,46 +93,24 @@ wants one, and `config` uses it to turn `ReadDirectoryChangesW`, `inotify` and
 `kqueue` into a single answer.
 
 `Notice.Quiet` cannot serve here. It repeats every budget while the silence
-lasts (`WATCH-Q2` below), which is what a listener asking *has this stopped?* needs and
+lasts (`WATCH-Q2`), which is what a listener asking *has this stopped?* needs and
 exactly wrong for a debounce, which must fire once and then cost nothing. `Settle`
 waits on the channel while nothing is happening, so an idle source wakes nobody.
 **Go only so far**; Python and C++ have no caller for it yet.
 
-## What a listener receives, and a scenario for each
+## What a listener receives
 
-The first notice after attaching is the snapshot, whether or not anything
-changed since before the listener attached — attaching late shows a running
-job as running, never a history to replay [WATCH-P1]. The same snapshot twice is
-not a change [WATCH-P2]; what counts as visible is the source's to say, and for a
-job record it is `JOB-N1` on [the job page](https://github.com/openabstractions/abstraction-job).
-
-A listener that took nothing while several changes landed receives one notice
-carrying the latest, and the source never waited for it [WATCH-C1].
-
-Quiet is reported to a waiting listener once the budget has passed with nothing
-visible, carrying the snapshot [WATCH-Q1]. It repeats each budget while the silence
-lasts [WATCH-Q2], and a change ends the silence: the next one is measured from the
-change [WATCH-Q3]. A listener without a budget is never told quiet.
-
-After close a listener receives closed and nothing else; a change made after
-close is not delivered to it [WATCH-X1]. Two listeners on one source are
-independent: each has its own snapshot, and taking a notice from one takes
-nothing from the other [WATCH-X2].
-
-**The listener's own wait is the only timer.** Quiet is judged by a listener
-that is waiting, after it has read, so a change the source already made is
-always delivered ahead of a quiet that would postdate it. A single-threaded
-driver cannot script a write that lands mid-wait, so this one is held by a
-unit test in each language rather than a scenario:
-`TestAPolledSourceIsReadBeforeSilenceIsJudged` in
-[`go/watch_test.go`](go/watch_test.go), its namesake in
-[`python/test_abstraction_watch.py`](python/test_abstraction_watch.py) and in
-[`cpp/test/test_watch.cpp`](cpp/test/test_watch.cpp).
+The rules a listener, a waiting service and a directory source follow are
+on [CONTRACT.md](CONTRACT.md), each with its `WATCH-*` id: a listener's
+notices (P1, P2, C1, Q1 to Q3, U1, X1, X2), the shared service waiter (W1 to
+W4, T1, H1) and the sources (S1, D1).
 
 ## Today
 
-- **Go**: `Poll`, `Push`, `Settle`; `job.WatchQuiet` and download's `Deliver`
-  sit on it.
+- **Go**: `Poll`, `PollDeadline`, `Push`, `Settle`, [`Gate`](https://openabstractions.github.io/reference.html#concept-watch.waiter-gate), `Recheck` and
+  `Dirs`; `job.WatchQuiet` and download's `Deliver` sit on it, and the config,
+  storage, logging, asks and runtime directory and registry `Observe` wait on
+  `Gate`.
 - **Python**: `poll`, `push`, `settle`.
 - **C++**: `Subscription::poll`, `Subscription::push`.
 
@@ -140,6 +126,9 @@ What may break:
 
 - A source that cannot be read keeps the last good snapshot rather than
   becoming empty, so a store that blinks does not empty a window.
+- Download's `Deliver` wakes on the unavailable notice and loads its job
+  directly. A store that cannot be listed is never judged abandoned; when the
+  load fails too, `Deliver` returns that error at once.
 - `Next` and `Changes()` (Go) are two spellings of one stream; drive a
   subscription with one of them.
 - A budget shorter than the store's poll interval shortens the interval to
@@ -172,13 +161,29 @@ hold an implementation to it.
 
 ## Requirements
 
-Go 1.22 or newer, standard library only. Python 3.9 or newer, standard library
+Go 1.25 or newer; the standard library and `golang.org/x/sys` for the directory source. Python 3.9 or newer, standard library
 only. C++17: header-only, so `cpp/include` on the include path is enough, and
 `cpp/CMakeLists.txt` installs a `find_package` package for the layers above it:
 
-    find_package(abstraction_watch 0.1 CONFIG REQUIRED)
+    find_package(abstraction_watch 0.8 CONFIG REQUIRED)
     target_link_libraries(your_target PRIVATE abstraction::watch)
+
+## Status
+
+**In development.** No standalone conformance scenario or stability promise.
+Pin a reviewed entry from
+[the tag list](https://github.com/openabstractions/abstraction-watch/tags).
 
 ## Licence
 
 Apache-2.0. See [LICENSE](https://github.com/openabstractions/abstraction-watch/blob/main/LICENSE).
+
+<!-- BEGIN GENERATED PERMISSION DEFINITIONS -->
+
+## Permission definitions
+
+Generated from the existing compiled catalogue. [RIGHTS.json](RIGHTS.json) contains the complete action/profile records, disclosure, lifecycle, first-use behavior, selector support and finite bundles.
+
+This projection has no named action definition for Watch. Debounce and settle snapshots remain provider utilities; cursor/gap observation and admission belong to each capability service.
+
+<!-- END GENERATED PERMISSION DEFINITIONS -->

@@ -26,14 +26,14 @@ refusal {
 struct NoticeMetadata {
  1: required bool quiet
  2: required i64 silence_ns
-}(document="true",unknown_fields="refuse",doc="Quiet means no visible change for at least the configured budget. Silence is elapsed monotonic observer duration in nanoseconds. This is metadata of Notice<T>; arbitrary native T is not serialized or replaced by this descriptor.")
+}(document="true",unknown_fields="refuse",doc="[NoticeMetadata](https://openabstractions.github.io/reference.html#concept-watch.notice-metadata). Quiet means no visible change for at least the configured budget. Silence is elapsed monotonic observer duration in nanoseconds. This is metadata of [Notice<T>](https://openabstractions.github.io/reference.html#concept-notice); arbitrary native T is not serialized or replaced by this descriptor.")
 struct WatchOptions {
  1: required i64 every_ns
  2: required i64 budget_ns
-}(unknown_fields="refuse",doc="Polling interval and quiet budget in nanoseconds. Existing native provider normalization applies. Clock origins are never transferred.")
+}(unknown_fields="refuse",doc="[WatchOptions](https://openabstractions.github.io/reference.html#concept-watch.subscription-options). Polling interval and quiet budget in nanoseconds. Existing native provider normalization applies. Clock origins are never transferred.")
 struct Stamp {
  1: required string value
-}(unknown_fields="refuse",doc="Opaque change token supplied beside a native payload by Source<T> or Post. A changed stamp denotes a visible change; it is not an authority or global timestamp.")
+}(unknown_fields="refuse",doc="[Stamp](https://openabstractions.github.io/reference.html#concept-watch.change-stamp). Opaque change token supplied beside a native payload by [Source<T>](https://openabstractions.github.io/reference.html#concept-watch.source) or Post. A changed stamp denotes a visible change; it is not an authority or global timestamp.")
 const list<string> lifecycle_operations = ["Poll", "Push", "Post", "Current", "Next", "Close", "Settle"]
 const list<string> failure_names = ["closed"]
 // Binding obligation: Notice<T>.Now, Source<T> callback, Subscription<T>, native

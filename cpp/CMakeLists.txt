@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    project(abstraction_watch LANGUAGES CXX VERSION 0.1.0)
+    project(abstraction_watch LANGUAGES CXX VERSION 0.8.0)
     set(ABSTRACTION_WATCH_STANDALONE ON)
 else()
     set(ABSTRACTION_WATCH_STANDALONE OFF)

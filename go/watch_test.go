@@ -3,6 +3,9 @@ package watch
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"sync"
 	"testing"
 	"time"
 )
@@ -97,20 +100,58 @@ func TestAPolledSourceIsReadBeforeSilenceIsJudged(t *testing.T) {
 	}
 }
 
-func TestAPolledSourceKeepsTheLastGoodPresentThroughAnError(t *testing.T) {
-	calls := 0
+func TestAFailingPolledSourceIsUnavailableAndNeverQuiet(t *testing.T) {
+	fixture, err := os.Open("testdata/poll-outage.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fixture.Close()
+	var budgetMS, pollMS, outageMS, outages, expected int
+	if n, err := fmt.Fscan(fixture, &budgetMS, &pollMS, &outageMS, &outages, &expected); err != nil || n != 5 {
+		t.Fatalf("outage fixture: %d fields: %v", n, err)
+	}
+	var mu sync.Mutex
+	failing := false
 	read := func() (string, string, error) {
-		calls++
-		if calls > 1 {
+		mu.Lock()
+		defer mu.Unlock()
+		if failing {
 			return "", "", errors.New("share blinked")
 		}
 		return "a", "1", nil
 	}
-	s := Poll(read, time.Hour, budget)
+	s := Poll(read, time.Duration(pollMS)*time.Millisecond, time.Duration(budgetMS)*time.Millisecond)
 	defer s.Close()
 	next(t, s)
-	if n := next(t, s); !n.Quiet || n.Now != "a" {
-		t.Fatalf("notice = %+v, want quiet over the last good present", n)
+	for outage := 0; outage < outages; outage++ {
+		mu.Lock()
+		failing = true
+		mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(outageMS)*time.Millisecond)
+		unavailable := 0
+		for {
+			n, err := s.Next(ctx)
+			if err != nil {
+				break
+			}
+			if n.Quiet {
+				t.Fatalf("notice = %+v, want no quiet while reads fail", n)
+			}
+			if !n.Unavailable || n.Now != "a" {
+				t.Fatalf("notice = %+v, want unavailable over the last good present", n)
+			}
+			unavailable++
+		}
+		cancel()
+		if unavailable != expected {
+			t.Fatalf("unavailable notices = %d, want %d", unavailable, expected)
+		}
+		mu.Lock()
+		failing = false
+		mu.Unlock()
+		if n := next(t, s); n.Unavailable || n.Quiet || n.Now != "a" {
+			t.Fatalf("notice = %+v, want a read with the same stamp to clear unavailable", n)
+		}
 	}
 }
 

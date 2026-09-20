@@ -1,7 +1,10 @@
 #include <abstraction/watch/watch.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -78,17 +81,39 @@ static void a_polled_source_is_read_before_silence_is_judged() {
     check("a polled source is read before silence is judged", n && n->now == "moved" && !n->quiet);
 }
 
-static void a_polled_source_keeps_the_last_good_present_through_an_error() {
-    int calls = 0;
+static void a_failing_polled_source_is_unavailable_and_never_quiet() {
+    std::ifstream fixture(std::filesystem::path(__FILE__).parent_path().parent_path().parent_path() / "go/testdata/poll-outage.txt");
+    int budget_ms, poll_ms, outage_ms, outages, expected;
+    if (!(fixture >> budget_ms >> poll_ms >> outage_ms >> outages >> expected)) {
+        check("outage fixture readable", false);
+        return;
+    }
+    std::atomic<bool> failing{false};
     auto s = Sub::poll(
-        [&calls]() {
-            if (++calls > 1) throw std::runtime_error("share blinked");
+        [&failing]() {
+            if (failing) throw std::runtime_error("share blinked");
             return std::make_pair(std::string("a"), std::string("1"));
         },
-        Millis{3600000}, kBudget);
+        Millis{poll_ms}, Millis{budget_ms});
     s->next();
-    auto n = s->next();
-    check("a polled source keeps the last good present through an error", n && n->quiet && n->now == "a");
+    for (int outage = 0; outage < outages; ++outage) {
+        failing = true;
+        const auto deadline = std::chrono::steady_clock::now() + Millis{outage_ms};
+        int unavailable = 0;
+        bool unexpected = false;
+        for (;;) {
+            const auto left = std::chrono::duration_cast<Millis>(deadline - std::chrono::steady_clock::now());
+            if (left.count() <= 0) break;
+            auto n = s->next(left);
+            if (!n) break;
+            if (n->quiet || !n->unavailable || n->now != "a") unexpected = true;
+            ++unavailable;
+        }
+        check("a failing polled source is unavailable once and never quiet", unavailable == expected && !unexpected);
+        failing = false;
+        auto n = s->next();
+        check("a read with the same stamp clears unavailable", n && !n->unavailable && !n->quiet && n->now == "a");
+    }
 }
 
 static void closed_ends_a_wait_and_everything_after_it() {
@@ -116,7 +141,7 @@ int main() {
     quiet_arrives_after_the_budget_and_repeats();
     a_change_ends_the_silence();
     a_polled_source_is_read_before_silence_is_judged();
-    a_polled_source_keeps_the_last_good_present_through_an_error();
+    a_failing_polled_source_is_unavailable_and_never_quiet();
     closed_ends_a_wait_and_everything_after_it();
     a_timeout_ends_a_wait();
     std::printf("%d failure(s)\n", g_failures);

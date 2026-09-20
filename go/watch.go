@@ -5,6 +5,11 @@
 // clock. The listener's own wait is the only timer: quiet is judged by a
 // listener that is waiting, after it has read, so a change the source already
 // made is always delivered ahead of a quiet that would postdate it.
+//
+// Unavailable says the last read of a polled source failed: Now is the last
+// good present and Unread is the time since the last successful read. It is
+// said once per outage, quiet is never said while reads fail, and the first
+// successful read after an outage is said even when its stamp is unchanged.
 package watch
 
 import (
@@ -19,9 +24,11 @@ var ErrClosed = errors.New("watch: closed")
 const DefaultEvery = time.Second
 
 type Notice[T any] struct {
-	Now     T
-	Quiet   bool
-	Silence time.Duration
+	Now         T
+	Quiet       bool
+	Silence     time.Duration
+	Unavailable bool
+	Unread      time.Duration
 }
 
 // Source reads the present and a stamp that differs whenever the present
@@ -29,8 +36,13 @@ type Notice[T any] struct {
 // it with an empty one.
 type Source[T any] func() (T, string, error)
 
+// DeadlineSource is a Source that also knows when its present next changes
+// by itself, such as a rule's expiry; the zero time says it does not know.
+type DeadlineSource[T any] func() (T, string, time.Time, error)
+
 type Subscription[T any] struct {
-	read   Source[T]
+	read   DeadlineSource[T]
+	next   time.Time
 	every  time.Duration
 	budget time.Duration
 
@@ -42,6 +54,10 @@ type Subscription[T any] struct {
 	told    time.Time
 	closed  bool
 
+	lastRead   time.Time
+	failing    bool
+	toldFailed bool
+
 	posted chan struct{}
 	done   chan struct{}
 	once   sync.Once
@@ -50,6 +66,16 @@ type Subscription[T any] struct {
 // Poll watches a source that has to be asked: it is read on entry to Next and
 // then every `every` while a listener waits.
 func Poll[T any](read Source[T], every, budget time.Duration) *Subscription[T] {
+	return PollDeadline(func() (T, string, time.Time, error) {
+		v, stamp, err := read()
+		return v, stamp, time.Time{}, err
+	}, every, budget)
+}
+
+// PollDeadline is Poll for a source that names its next known deadline: the
+// subscription reads again at that deadline rather than waiting out the
+// interval (WATCH-H1).
+func PollDeadline[T any](read DeadlineSource[T], every, budget time.Duration) *Subscription[T] {
 	if every <= 0 {
 		every = DefaultEvery
 	}
@@ -103,13 +129,27 @@ func (s *Subscription[T]) refresh() {
 	if s.read == nil {
 		return
 	}
-	v, stamp, err := s.read()
+	v, stamp, next, err := s.read()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err != nil {
+		// A failing source names no deadline: the interval paces its rereads.
+		s.next = time.Time{}
+		if !s.failing {
+			s.failing, s.toldFailed = true, false
+		}
 		return
 	}
-	s.mu.Lock()
-	s.take(v, stamp)
-	s.mu.Unlock()
+	s.lastRead = time.Now()
+	s.next = time.Time{}
+	if next.After(s.lastRead) {
+		s.next = next // a deadline already passed is ignored, never re-read in a loop
+	}
+	recovered := s.failing
+	s.failing = false
+	if !s.take(v, stamp) && recovered {
+		s.pending, s.told = true, s.lastRead
+	}
 }
 
 // Current is the present as of the last read. Next is what reads.
@@ -120,7 +160,8 @@ func (s *Subscription[T]) Current() T {
 }
 
 // Next blocks until there is something to say: a changed present, a quiet one
-// once the budget has passed with nothing, ErrClosed, or the context's error.
+// once the budget has passed with nothing, an Unavailable one once per outage
+// of a polled source (WATCH-U1), ErrClosed, or the context's error.
 func (s *Subscription[T]) Next(ctx context.Context) (Notice[T], error) {
 	var none Notice[T]
 	for {
@@ -133,11 +174,21 @@ func (s *Subscription[T]) Next(ctx context.Context) (Notice[T], error) {
 		if s.pending {
 			s.pending = false
 			n := Notice[T]{Now: s.now}
+			if s.failing {
+				s.toldFailed = true
+				n.Unavailable, n.Unread = true, s.unread()
+			}
+			s.mu.Unlock()
+			return n, nil
+		}
+		if s.failing && !s.toldFailed {
+			s.toldFailed = true
+			n := Notice[T]{Now: s.now, Unavailable: true, Unread: s.unread()}
 			s.mu.Unlock()
 			return n, nil
 		}
 		wait := s.every
-		if s.budget > 0 {
+		if s.budget > 0 && !s.failing {
 			since := s.changed
 			if s.told.After(since) {
 				since = s.told
@@ -149,6 +200,12 @@ func (s *Subscription[T]) Next(ctx context.Context) (Notice[T], error) {
 				s.mu.Unlock()
 				return n, nil
 			}
+			if wait <= 0 || left < wait {
+				wait = left
+			}
+		}
+		if left := time.Until(s.next); !s.next.IsZero() && left > 0 {
+			// A deadline that is not ahead is never waited for again.
 			if wait <= 0 || left < wait {
 				wait = left
 			}
@@ -173,6 +230,15 @@ func (s *Subscription[T]) Next(ctx context.Context) (Notice[T], error) {
 		case <-tick:
 		}
 	}
+}
+
+// unread is the time since the last successful read; with none yet it is the
+// subscription's age.
+func (s *Subscription[T]) unread() time.Duration {
+	if s.lastRead.IsZero() {
+		return time.Since(s.changed)
+	}
+	return time.Since(s.lastRead)
 }
 
 func stop(t *time.Timer) {

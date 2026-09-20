@@ -1,7 +1,9 @@
 # abstraction-watch, in Python
 
+*For Python applications.*
+
 Be told what is true now, and be told when nothing has changed for a while.
-A `Notice` carries the present; `quiet` says nothing visible has moved for at
+A [`Notice`](https://openabstractions.github.io/reference.html#concept-notice) carries the present; `quiet` says nothing visible has moved for at
 least the budget, and `silence` says for how long. One module, standard library
 only, importing nothing of ours.
 
@@ -53,7 +55,7 @@ delivered ahead of a quiet that would postdate it.
 |---|---|
 | `push(first, stamp, budget)` | a subscription over a source that reports its own changes through `post` |
 | `poll(read, every, budget)` | a subscription over a source that has to be asked. `read` returns `(value, stamp)`; `every` is the interval between asks while a listener waits |
-| `Subscription.next(timeout=None)` | the next `Notice`: a change, or quiet once the budget passed with none |
+| `Subscription.next(timeout=None)` | the next `Notice`: a change, quiet once the budget passed with none, or unavailable once per outage of a polled source (`WATCH-U1`) |
 | `Subscription.current()` | what is true now, without waiting |
 | `Subscription.post(value, stamp)` | tell a `push` subscription the source moved |
 | `Subscription.close()` | end it. A waiting `next` raises `Closed` |

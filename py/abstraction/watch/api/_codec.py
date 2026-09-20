@@ -45,53 +45,9 @@ def _strs(out, v, depth):
 
 
 def _raw(out, s, depth):
-    b = s.encode("utf-8") if isinstance(s, str) else s
-    i, n = 0, len(b)
-    while i < n:
-        c = b[i]
-        if c in _WS:
-            i += 1
-        elif c == 0x22:
-            j = i + 1
-            while j < n:
-                if b[j] == 0x5C:
-                    j += 2
-                    continue
-                if b[j] == 0x22:
-                    j += 1
-                    break
-                j += 1
-            out += b[i:j]
-            i = j
-        elif c in (0x7B, 0x5B):
-            out.append(c)
-            i += 1
-            j = i
-            while j < n and b[j] in _WS:
-                j += 1
-            if j < n and b[j] in (0x7D, 0x5D):
-                out.append(b[j])
-                i = j + 1
-            else:
-                depth += 1
-                out += b"\n"
-                _pad(out, depth)
-        elif c in (0x7D, 0x5D):
-            depth -= 1
-            out += b"\n"
-            _pad(out, depth)
-            out.append(c)
-            i += 1
-        elif c == 0x2C:
-            out += b",\n"
-            _pad(out, depth)
-            i += 1
-        elif c == 0x3A:
-            out += b": "
-            i += 1
-        else:
-            out.append(c)
-            i += 1
+    # An opaque value's bytes as they are ([DEF-A3]).
+    # Whitespace around the value is not part of it.
+    out += (s.encode("utf-8") if isinstance(s, str) else bytes(s)).strip(bytes(_WS))
 
 
 def _rawmap(out, m, depth):
@@ -126,10 +82,11 @@ FAILURE_NAMES = ["closed"]
 
 @dataclasses.dataclass(kw_only=True)
 class NoticeMetadata:
-    """Quiet means no visible change for at least the configured budget. Silence is
+    """[NoticeMetadata](https://openabstractions.github.io/reference.html#concept-watch.notice-metadata).
+    Quiet means no visible change for at least the configured budget. Silence is
     elapsed monotonic observer duration in nanoseconds. This is metadata of
-    Notice<T>; arbitrary native T is not serialized or replaced by this
-    descriptor."""
+    [Notice<T>](https://openabstractions.github.io/reference.html#concept-notice);
+    arbitrary native T is not serialized or replaced by this descriptor."""
 
     quiet: bool = False
     silence_ns: int = 0
@@ -137,7 +94,8 @@ class NoticeMetadata:
 
 @dataclasses.dataclass(kw_only=True)
 class WatchOptions:
-    """Polling interval and quiet budget in nanoseconds. Existing native provider
+    """[WatchOptions](https://openabstractions.github.io/reference.html#concept-watch.subscription-options).
+    Polling interval and quiet budget in nanoseconds. Existing native provider
     normalization applies. Clock origins are never transferred."""
 
     every_ns: int = 0
@@ -146,9 +104,11 @@ class WatchOptions:
 
 @dataclasses.dataclass(kw_only=True)
 class Stamp:
-    """Opaque change token supplied beside a native payload by Source<T> or Post. A
-    changed stamp denotes a visible change; it is not an authority or global
-    timestamp."""
+    """[Stamp](https://openabstractions.github.io/reference.html#concept-watch.change-stamp).
+    Opaque change token supplied beside a native payload by
+    [Source<T>](https://openabstractions.github.io/reference.html#concept-watch.source)
+    or Post. A changed stamp denotes a visible change; it is not an authority or
+    global timestamp."""
 
     value: str = ""
 
@@ -255,6 +215,17 @@ class _Reader:
     def string(self):
         if self.at() != _QUOTE:
             raise self.refuse("wrong_type")
+        # Most wire keys and values contain no escapes. Search and validate
+        # those bytes in C; retain the bytewise path for escapes and refusals.
+        end = self.buf.find(b'"', self.pos + 1)
+        if end >= 0:
+            chunk = self.buf[self.pos + 1:end]
+            if b"\\" not in chunk and (not chunk or min(chunk) >= 0x20):
+                self.pos = end + 1
+                try:
+                    return chunk.decode("utf-8")
+                except UnicodeDecodeError:
+                    raise self.refuse("bad_string") from None
         self.pos += 1
         out = bytearray()
         while True:
@@ -635,6 +606,38 @@ def decode(data):
     r = _Reader(bytes(data))
     r.ws()
     v = _read_notice_metadata(r)
+    r.ws()
+    if r.pos < len(r.buf):
+        raise r.refuse("trailing_bytes")
+    return v
+
+
+_JSON_RECORDS = {
+    NoticeMetadata: (_write_notice_metadata, _read_notice_metadata),
+    WatchOptions: (_write_watch_options, _read_watch_options),
+    Stamp: (_write_stamp, _read_stamp),
+}
+
+
+def to_json(value):
+    """One record as JSON bytes, laid out as this module's documents are and
+    without the document terminator."""
+    codec = _JSON_RECORDS.get(type(value))
+    if codec is None:
+        raise TypeError("to_json takes a record of this module, not %s" % type(value).__name__)
+    out = bytearray()
+    codec[0](out, value, 0)
+    return bytes(out)
+
+
+def from_json(kind, data):
+    """Read one record of class kind from data; a refused input raises Refusal."""
+    codec = _JSON_RECORDS.get(kind)
+    if codec is None:
+        raise TypeError("from_json takes a record class of this module, not %r" % (kind,))
+    r = _Reader(bytes(data))
+    r.ws()
+    v = codec[1](r)
     r.ws()
     if r.pos < len(r.buf):
         raise r.refuse("trailing_bytes")

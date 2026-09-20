@@ -29,15 +29,17 @@ inline const std::vector<std::string> kLifecycleOperations = {"Poll", "Push", "P
 
 inline const std::vector<std::string> kFailureNames = {"closed"};
 
+// [NoticeMetadata](https://openabstractions.github.io/reference.html#concept-watch.notice-metadata).
 // Quiet means no visible change for at least the configured budget. Silence is
 // elapsed monotonic observer duration in nanoseconds. This is metadata of
-// Notice<T>; arbitrary native T is not serialized or replaced by this
-// descriptor.
+// [Notice<T>](https://openabstractions.github.io/reference.html#concept-notice);
+// arbitrary native T is not serialized or replaced by this descriptor.
 struct NoticeMetadata {
     bool quiet = false;
     std::int64_t silence_ns = 0;
 };
 
+// [WatchOptions](https://openabstractions.github.io/reference.html#concept-watch.subscription-options).
 // Polling interval and quiet budget in nanoseconds. Existing native provider
 // normalization applies. Clock origins are never transferred.
 struct WatchOptions {
@@ -45,9 +47,11 @@ struct WatchOptions {
     std::int64_t budget_ns = 0;
 };
 
-// Opaque change token supplied beside a native payload by Source<T> or Post. A
-// changed stamp denotes a visible change; it is not an authority or global
-// timestamp.
+// [Stamp](https://openabstractions.github.io/reference.html#concept-watch.change-stamp).
+// Opaque change token supplied beside a native payload by
+// [Source<T>](https://openabstractions.github.io/reference.html#concept-watch.source)
+// or Post. A changed stamp denotes a visible change; it is not an authority or
+// global timestamp.
 struct Stamp {
     std::string value;
 };
@@ -101,52 +105,13 @@ inline void strs(std::string& out, const std::vector<std::string>& v, int depth)
 
 inline bool ws(unsigned char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
 
-inline void raw(std::string& out, const std::string& s, int depth) {
-    const std::size_t n = s.size();
-    for (std::size_t i = 0; i < n;) {
-        const unsigned char c = static_cast<unsigned char>(s[i]);
-        if (ws(c)) {
-            ++i;
-        } else if (c == '"') {
-            std::size_t j = i + 1;
-            while (j < n) {
-                if (s[j] == '\\') { j += 2; continue; }
-                if (s[j] == '"') { ++j; break; }
-                ++j;
-            }
-            out.append(s, i, j - i);
-            i = j;
-        } else if (c == '{' || c == '[') {
-            out += static_cast<char>(c);
-            ++i;
-            std::size_t j = i;
-            while (j < n && ws(static_cast<unsigned char>(s[j]))) ++j;
-            if (j < n && (s[j] == '}' || s[j] == ']')) {
-                out += s[j];
-                i = j + 1;
-            } else {
-                ++depth;
-                out += '\n';
-                pad(out, depth);
-            }
-        } else if (c == '}' || c == ']') {
-            --depth;
-            out += '\n';
-            pad(out, depth);
-            out += static_cast<char>(c);
-            ++i;
-        } else if (c == ',') {
-            out += ",\n";
-            pad(out, depth);
-            ++i;
-        } else if (c == ':') {
-            out += ": ";
-            ++i;
-        } else {
-            out += static_cast<char>(c);
-            ++i;
-        }
-    }
+// raw writes an opaque value's bytes as they are ([DEF-A3]).
+inline void raw(std::string& out, const std::string& s, int /*depth*/) {
+    // Whitespace around the value is not part of it.
+    std::size_t i = 0, j = s.size();
+    while (i < j && ws(static_cast<unsigned char>(s[i]))) ++i;
+    while (j > i && ws(static_cast<unsigned char>(s[j - 1]))) --j;
+    out.append(s, i, j - i);
 }
 
 // std::char_traits<char>::compare is specified to order by unsigned char, so a
@@ -273,6 +238,9 @@ struct Reader {
     std::string_view buf;
     std::size_t pos = 0;
     int depth = 0;
+    int limit = 0;
+    int ceiling = 0;
+    int depth_limit() const {int own=ceiling>0?ceiling:kDepthLimit;return limit>0&&limit<own?limit:own;}
 
     [[noreturn]] void refuse(const char* word) const { throw Refusal(word, pos); }
 
@@ -287,7 +255,7 @@ struct Reader {
     }
 
     void enter() {
-        if (++depth > kDepthLimit) refuse("depth_exceeded");
+        if (++depth > depth_limit()) refuse("depth_exceeded");
     }
 
     std::string str() {
@@ -650,6 +618,56 @@ inline NoticeMetadata decode(std::string_view data) {
     detail::Reader r{data};
     r.skip_ws();
     NoticeMetadata v = detail::decode_notice_metadata(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+// to_json writes one record as JSON, laid out as this definition's documents
+// are and without the document terminator; from_json<T> reads one and throws
+// Refusal for what the record's reader refuses.
+template <class T> T from_json(std::string_view data);
+
+inline std::string to_json(const NoticeMetadata& v) {
+    std::string out;
+    detail::enc_notice_metadata(out, v, 0);
+    return out;
+}
+
+template <> inline NoticeMetadata from_json<NoticeMetadata>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    NoticeMetadata v = detail::decode_notice_metadata(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const WatchOptions& v) {
+    std::string out;
+    detail::enc_watch_options(out, v, 0);
+    return out;
+}
+
+template <> inline WatchOptions from_json<WatchOptions>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    WatchOptions v = detail::decode_watch_options(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const Stamp& v) {
+    std::string out;
+    detail::enc_stamp(out, v, 0);
+    return out;
+}
+
+template <> inline Stamp from_json<Stamp>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    Stamp v = detail::decode_stamp(r);
     r.skip_ws();
     if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
     return v;

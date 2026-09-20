@@ -1,5 +1,7 @@
 import queue
+from pathlib import Path
 import threading
+import time
 import unittest
 
 from abstraction_watch import Closed, poll, push, settle
@@ -79,19 +81,39 @@ class Poll(unittest.TestCase):
         n = s.next()
         self.assertEqual(("moved", False), (n.now, n.quiet))
 
-    def test_a_polled_source_keeps_the_last_good_present_through_an_error(self):
-        calls = [0]
+    def test_a_failing_polled_source_is_unavailable_and_never_quiet(self):
+        budget_ms, poll_ms, outage_ms, outages, expected = map(
+            int, (Path(__file__).parent.parent / "go/testdata/poll-outage.txt").read_text().split())
+        failing = [False]
 
         def read():
-            calls[0] += 1
-            if calls[0] > 1:
+            if failing[0]:
                 raise OSError("share blinked")
             return ("a", "1")
 
-        s = poll(read, 3600.0, BUDGET)
+        s = poll(read, poll_ms / 1000, budget_ms / 1000)
         s.next()
+        for _ in range(outages):
+            self.check_outage(s, failing, outage_ms / 1000, expected)
+        s.close()
+
+    def check_outage(self, s, failing, duration, expected):
+        failing[0] = True
+        notices = []
+        deadline = time.monotonic() + duration
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            try:
+                notices.append(s.next(left))
+            except TimeoutError:
+                break
+        self.assertEqual([("a", False, True)] * expected,
+                         [(n.now, n.quiet, n.unavailable) for n in notices])
+        failing[0] = False
         n = s.next()
-        self.assertEqual(("a", True), (n.now, n.quiet))
+        self.assertEqual(("a", False, False), (n.now, n.quiet, n.unavailable))
 
     def test_two_subscriptions_are_independent(self):
         read = lambda: (1, "1")

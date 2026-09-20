@@ -7,6 +7,12 @@
 // clock. The listener's own wait is the only timer: quiet is judged by a
 // listener that is waiting, after it has read, so a change the source already
 // made is always delivered ahead of a quiet that would postdate it.
+//
+// `unavailable` says the last read of a polled source failed: `now` is the
+// last good present and `unread` is the time since the last successful read.
+// It is said once per outage, quiet is never said while reads fail, and the
+// first successful read after an outage is said even when its stamp is
+// unchanged.
 
 #include <algorithm>
 #include <chrono>
@@ -29,6 +35,8 @@ struct Notice {
     T now;
     bool quiet = false;
     Millis silence{0};
+    bool unavailable = false;
+    Millis unread{0};
 };
 
 template <class T>
@@ -77,12 +85,20 @@ public:
             if (closed_) return std::nullopt;
             if (pending_) {
                 pending_ = false;
+                if (failing_) {
+                    told_failed_ = true;
+                    return Notice<T>{now_, false, Millis{0}, true, unread()};
+                }
                 return Notice<T>{now_, false, Millis{0}};
+            }
+            if (failing_ && !told_failed_) {
+                told_failed_ = true;
+                return Notice<T>{now_, false, Millis{0}, true, unread()};
             }
             const auto now = Clock::now();
             std::optional<Clock::time_point> until;
             if (read_) until = now + every_;
-            if (budget_.count() > 0) {
+            if (budget_.count() > 0 && !failing_) {
                 const auto since = std::max(changed_, told_);
                 if (now - since >= budget_) {
                     told_ = now;
@@ -133,10 +149,27 @@ private:
         try {
             got = read_();
         } catch (...) {
+            std::lock_guard<std::mutex> lk(mu_);
+            if (!failing_) {
+                failing_ = true;
+                told_failed_ = false;
+            }
             return;
         }
         std::lock_guard<std::mutex> lk(mu_);
-        take(std::move(got.first), std::move(got.second));
+        last_read_ = Clock::now();
+        const bool recovered = failing_;
+        failing_ = false;
+        if (!take(std::move(got.first), std::move(got.second)) && recovered) {
+            pending_ = true;
+            told_ = *last_read_;
+        }
+    }
+
+    // The time since the last successful read; with none yet, the age.
+    Millis unread() const {
+        const auto since = last_read_ ? *last_read_ : changed_;
+        return std::chrono::duration_cast<Millis>(Clock::now() - since);
     }
 
     Source read_;
@@ -151,6 +184,9 @@ private:
     Clock::time_point changed_;
     Clock::time_point told_{};
     bool closed_ = false;
+    std::optional<Clock::time_point> last_read_;
+    bool failing_ = false;
+    bool told_failed_ = false;
 };
 
 }  // namespace abstraction::watch
