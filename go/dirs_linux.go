@@ -22,7 +22,7 @@ func Dirs(dirs, _ []string) (<-chan struct{}, func(), func() error, error) {
 	}
 	added := 0
 	for _, dir := range dirs {
-		mask := uint32(syscall.IN_CLOSE_WRITE | syscall.IN_MOVED_TO | syscall.IN_CREATE | syscall.IN_DELETE |
+		mask := uint32(syscall.IN_CLOSE_WRITE | syscall.IN_MOVED_TO | syscall.IN_MOVED_FROM | syscall.IN_CREATE | syscall.IN_DELETE |
 			syscall.IN_DELETE_SELF | syscall.IN_MOVE_SELF)
 		if _, err := syscall.InotifyAddWatch(fd, dir, mask); err == nil {
 			added++

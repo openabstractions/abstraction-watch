@@ -2,6 +2,9 @@
 
 Binds: `watch.thrift`
 
+`watch.thrift` names `abstraction.watch/watcher@1`, a direct language
+interface with no endpoint.
+
 Watch owns observation: what a listener of a changing present is told
 (`Poll`, `Push`, `Settle`), the one server-side waiter every service
 `Observe` uses ([`Gate`](https://openabstractions.github.io/reference.html#concept-watch.waiter-gate)), the one asynchronous recheck pass (`Recheck`), and
@@ -198,7 +201,7 @@ provider reports its polled `job.Watch` mechanism explicitly.
 ## Scenarios
 
 The notice rules (P, C, Q, X) are held by the `notice-*` scenarios in
-[`abstraction-download/testdata/scenarios/`](../abstraction-download/testdata/scenarios),
+`abstraction-download/testdata/scenarios/` (`../abstraction-download/testdata/scenarios`),
 which the download driver runs over a job store.
 
 The other rules are held by unit tests:
